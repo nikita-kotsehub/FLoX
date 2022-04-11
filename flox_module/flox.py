@@ -1,12 +1,11 @@
 import numpy as np
 from tensorflow import keras
-from funcx.sdk.client import FuncXClient
-from funcx.sdk.executor import FuncXExecutor
+from tensorflow.keras import layers
 import time
 
-from timeit import default_timer as timer
-from datetime import datetime
-import csv
+from funcx.sdk.client import FuncXClient
+from funcx.sdk.executor import FuncXExecutor
+
 
 def get_edge_weights(sample_counts):
     """
@@ -60,8 +59,7 @@ def training_function(json_model_config,
                       input_shape=(32, 28, 28, 1),
                       loss="categorical_crossentropy",
                       optimizer="adam",
-                      metrics=["accuracy"]                            
-                      
+                      metrics=["accuracy"]                                               
 ):
     """
     This function gets deployed to the given endpoints with corresponding parameters. 
@@ -111,7 +109,7 @@ def training_function(json_model_config,
         optimizer for for TF's model.fit() function
 
     metrics: str/list 
-        metrics for TF's model.fit() function. E.g, metrics=["accuracy"]
+        metrics for TF's model.fit() function. E.g, metrics=["accuracy"],
 
     Returns
     -------
@@ -122,35 +120,11 @@ def training_function(json_model_config,
         the number of samples the model was trained on. 
         Can be used to find the weighted average by # of samples seen
 
-    task_runtime: float
-        runtime of the entire task, in seconds
-
-    training_runtime: training_runtime,
-        runtime of the training phase, in seconds
-
-    data_runtime: data_runtime
-        runtime of the data processing phase, in seconds
-
-    task_received_time: task_received_time
-        timestamp of when the task was received
-    
     """
-    from datetime import datetime
-
-    # record when the task was initiated
-    task_received_time = str(datetime.utcnow())
-
-    from timeit import default_timer as timer
-    # record when the task started 
-    task_start = timer()
-
     # import all the dependencies required for funcX functions)
     from tensorflow import keras
     import numpy as np
     import os
-
-    # record when data processing phase started
-    data_start = timer()
 
     # retrieve (and optionally process) the data
     if data_source == 'keras':
@@ -166,7 +140,7 @@ def training_function(json_model_config,
         }
         image_datasets = ['mnist', 'fashion_mnist', 'cifar10', 'cifar100']
 
-        # check if the dataset exists
+        # check if the Keras dataset exists
         if keras_dataset not in available_datasets:
             raise Exception(f"Please select one of the built-in Keras datasets: {available_datasets}")
 
@@ -217,29 +191,25 @@ def training_function(json_model_config,
             image_size_y = input_shape[2]
             image_size_x = input_shape[1]
 
+            # take a limited number of samples, if indicated
             if num_samples:
                 idx = np.random.choice(np.arange(len(x_train)), num_samples, replace=True)
                 x_train = x_train[idx]
                 y_train = y_train[idx]
             
+            # reshape and scale to pixel values to 0-1
             x_train = x_train.reshape(len(x_train), image_size_x, image_size_y, depth)
             x_train = x_train / 255.0
 
     else:
-        raise Exception("Please choose one of data sources: ['local', 'keras', 'custom']")
-
-    # record the runtime of the data processing phase
-    data_runtime = timer() - data_start
-
-    # record the start of training phase
-    training_start = timer()
+        raise Exception("Please choose one of data sources: ['local', 'keras']")
 
     # create the model
     model = keras.models.model_from_json(json_model_config)
 
     # compile the model and set weights to the global model
     model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
- 
+
     try:
         model.set_weights(global_model_weights)
     except:
@@ -254,19 +224,8 @@ def training_function(json_model_config,
     # transform to a numpy array
     np_model_weights = np.asarray(model_weights, dtype=object)
 
-    # record the runtime of the training phase
-    training_runtime = timer() - training_start
-
-    # record the runtime of the entire task
-    task_runtime = timer() - task_start
-
-    # return the updated weights, number of samples the model was trained on, and runtimes
-    return {"model_weights":np_model_weights,
-     "samples_count": x_train.shape[0],
-      'task_runtime':task_runtime,
-       'training_runtime': training_runtime,
-       'data_runtime': data_runtime,
-       'task_received_time': task_received_time}
+    # return the updated weights and number of samples the model was trained on
+    return {"model_weights":np_model_weights, "samples_count": x_train.shape[0]}
 
 def federated_learning(global_model, 
                       endpoint_ids, 
@@ -276,7 +235,7 @@ def federated_learning(global_model,
                       time_interval=0,
                       aggregation_mode="weighted_average",
                       data_source: str = "keras",
-                      keras_dataset = "mnist", 
+                      keras_dataset = "mnist",  
                       preprocess=False,
                       path_dir='/home/pi/datasets', 
                       x_train_name="mnist_x_train.npy", 
@@ -287,12 +246,7 @@ def federated_learning(global_model,
                       metrics=["accuracy"],
                       evaluation_function=eval_model,
                       x_test=None,
-                      y_test=None, 
-                      csv_path='/content/drive/MyDrive/flx/evaluation/new_experiments.csv',
-                      experiment='default',
-                      description='default',
-                      dataset_name="not provided",
-                      client_names="not provided"                          
+                      y_test=None
                       ):
     """
     Facilitates Federated Learning for *loops* rounds. 
@@ -308,10 +262,10 @@ def federated_learning(global_model,
 
     num_samples: int or list
         indicates how many samples to get for training on endpoints
-
         if int, applies the same num_samples to all endpoints. 
         if list, it will use the corresponding number of samples for each device
         the list should have the same number of entries as the number of endpoints
+
 
     epochs: int or list
         indicates how many epochs to use for training on endpoints
@@ -373,22 +327,6 @@ def federated_learning(global_model,
     y_test: list
         y_test labels for x_test
 
-    csv_path: str
-        path to a csv file where you would like to store results of the experiments
-
-    experiment: int
-        indicates the ID of the experiment for easy quering afterwards. Needs to be changed after each experiment
-
-    description: str
-        optional description of the experiments
-
-    dataset_name: str
-        if using data_source="local", use this to indicate the dataset's name. 
-        if data_source="keras", uses the keras_dataset name by default
-
-    client_names: list of str
-        indicates the list of names of participating endpoints
-        TODO: replace with the endpoint_id or add a new field
 
     Returns
     -------
@@ -396,10 +334,6 @@ def federated_learning(global_model,
         the original model but with updated weights after all the FL rounds
 
     """
-
-    # record when the experiment started
-    experiment_start = datetime.utcnow()
-
     # instantiate the FuncXExecutor
     fx = FuncXExecutor(FuncXClient())
 
@@ -409,61 +343,40 @@ def federated_learning(global_model,
 
     if type(epochs) == int:
         epochs = [epochs]*len(endpoint_ids)
-
+    
     # start running FL loops
     for i in range(loops):
-        # record the timestamp when the round started
-        round_start_time = str(datetime.utcnow())
-
-        # record when the round started
-        round_start = timer()
 
         # get the model's architecture and weights
         json_config = global_model.to_json()
         gm_weights = global_model.get_weights()
         gm_weights_np = np.asarray(gm_weights, dtype=object)
 
-        task_sending_times = []
-        
         #fx = FuncXExecutor(FuncXClient())
         tasks = []
 
-        # record when the task sending phase started
-        tasks_start = timer()
-
         # submit the corresponding parameters to each endpoint for a round of FL 
         for e, num_s, num_epoch, path_d in zip(endpoint_ids, num_samples, epochs, path_dir): 
-            task_sending_times.append(str(datetime.utcnow()))
             tasks.append(fx.submit(training_function, 
                                    json_model_config=json_config, 
                                     global_model_weights=gm_weights_np, 
                                     num_samples=num_s,
                                     epochs=num_epoch,
                                     data_source=data_source,
-                                    preprocess=preprocess,
                                     keras_dataset=keras_dataset,
+                                    preprocess=preprocess,
+                                    path_dir=path_d,
+                                    x_train_name=x_train_name,
+                                    y_train_name=y_train_name,
                                     input_shape=input_shape,
                                     loss=loss,
                                     optimizer=optimizer,
                                     metrics=metrics,
-                                    path_dir=path_d,
-                                    x_train_name=x_train_name,
-                                    y_train_name=y_train_name,
                                     endpoint_id=e))
-
         
-        # extract weights from each edge model
+        # extract model updates from each endpoints once they are available
         model_weights = [t.result()["model_weights"] for t in tasks]
-
-        # record the timestamp of when all tasks were completed
-        tasks_received_time = str(datetime.utcnow())
         
-        # record the runtime of the task sending phase
-        tasks_sending_runtime = timer() - tasks_start
-
-        # record the start of the aggregation phase
-        aggregation_start = timer()
-
         # aggregate the updates using simple 'average' or 'weighted_average'
         if aggregation_mode == "average":
             average_weights = np.mean(model_weights, axis=0)
@@ -482,7 +395,6 @@ def federated_learning(global_model,
             
         # assign the updated weights to the global_model
         global_model.set_weights(average_weights)
-        aggregation_runtime = timer() - aggregation_start
 
         print(f'Epoch {i}, Trained Federated Model')
 
@@ -490,112 +402,9 @@ def federated_learning(global_model,
         if x_test is not None and y_test is not None and evaluation_function and callable(evaluation_function):
             loss_eval, accuracy = evaluation_function(global_model, x_test, y_test)
 
-        # record the runtime of the round 
-        round_runtime = timer() - round_start
-
-        # retrieve the task_runtimes, find an average, and round the entries 
-        endpoint_task_runtimes = [t.result()["task_runtime"] for t in tasks]
-        average_task_runtime = np.mean(endpoint_task_runtimes, axis=0)
-        endpoint_task_runtimes = [round(i, 3) for i in endpoint_task_runtimes]
-        
-        # retrieve the training phase runtimes, find an average, and round the entries 
-        endpoint_training_runtimes = [t.result()["training_runtime"] for t in tasks]
-        average_training_runtime = np.mean(endpoint_training_runtimes, axis=0)
-        endpoint_training_runtimes = [round(i, 3) for i in endpoint_training_runtimes]
-
-        # retrieve the data processing runtimes and round the entries 
-        endpoint_data_runtimes = [t.result()["data_runtime"] for t in tasks]
-        endpoint_data_runtimes = [round(i, 3) for i in endpoint_data_runtimes]
-
-        # retrieve the timestamps of when the tasks were received on the endpoints 
-        task_endpoint_received_times = [t.result()["task_received_time"] for t in tasks]
-        
-        # record the communication time defined as:
-        # time of how long it took to send the tasks and receive the results - the MAX of endpoint_task_runtimes
-        # this essentially measures communication time for the slowest device
-        # this entry isn't very accurate and should only be used as a proxy
-        communication_time = tasks_sending_runtime - max(endpoint_task_runtimes)
-
-        # find the size of the model
-        model_size = sum(w.size for w in gm_weights_np) * gm_weights_np.itemsize
-
-        endpoint_losses = []
-        endpoint_accuracies = []
-
-        # measure the validation accuracy of each model update
-        for m_weight in model_weights:
-            # instantiate a new model
-            m = keras.models.model_from_json(json_config)
-            m.compile(loss=loss, optimizer=optimizer, metrics=metrics)
-
-            # set the weights
-            try:
-                m.set_weights(m_weight)
-            except:
-                m.build(input_shape=input_shape)
-                m.set_weights(m_weight)
-
-            # evaluate the performance
-            e_loss, e_accuracy = evaluation_function(m, x_test, y_test, silent=True)
-            endpoint_losses.append(round(e_loss, 3))
-            endpoint_accuracies.append(round(e_accuracy, 3))
-
-        if data_source == "keras":
-            dataset_name = keras_dataset
-
-        # header for the csv entry
-        header = ['experiment', 'client_name', 'description', 'round', 'epochs', 'num_samples', 'dataset', 'n_clients',
-         'agg_accuracy', 'endpoint_accuracy', 'agg_loss', 'endpoint_loss', 'round_runtime',
-          'task_and_sending_runtime', 'average_task_runtime', 'endpoint_task_runtime',
-           'communication_time', 'average_training_runtime', 'endpoint_training_runtime', 'files_size', 'aggregation_runtime', 'endpoint_data_processing_runtime',
-             'task_sent_time', 'task_received_back_time', 'task_endpoint_received_time',
-             'round_start_time', 'round_end_time']
-        
-        # make a CSV entry for each endpoint
-        for epo, num_sam, ep_accuracy, ep_loss, ep_task_runtime, ep_training_runtime, client_name, ep_data_runtime, tsk_sent_time, tsk_ep_received_time in zip(epochs, num_samples, endpoint_accuracies, endpoint_losses, endpoint_task_runtimes, endpoint_training_runtimes, client_names, endpoint_data_runtimes, task_sending_times, task_endpoint_received_times):
-            csv_entry = {'experiment':experiment,
-                        'client_name':client_name,
-                        'description':description,
-                        'round':i, 
-                        'epochs':epo, 
-                        'num_samples':num_sam, 
-                        'dataset':dataset_name, 
-                        'n_clients':len(endpoint_ids), 
-                        'agg_accuracy':accuracy,
-                        'endpoint_accuracy': ep_accuracy, 
-                        'agg_loss':loss_eval,
-                        'endpoint_loss': ep_loss, 
-                        'round_runtime':round_runtime, 
-                        'task_and_sending_runtime':tasks_sending_runtime,
-                        'average_task_runtime': average_task_runtime,
-                        'endpoint_task_runtime': ep_task_runtime,
-                        'communication_time': communication_time,
-                        'average_training_runtime': average_training_runtime,
-                        'endpoint_training_runtime': ep_training_runtime,
-                        'files_size':model_size,
-                        'aggregation_runtime': aggregation_runtime,
-                        'endpoint_data_processing_runtime': ep_data_runtime,
-                        'task_sent_time': tsk_sent_time,
-                        'task_received_back_time': tasks_received_time,
-                        'task_endpoint_received_time': tsk_ep_received_time,
-                        'round_start_time': round_start_time,
-                        'round_end_time': str(datetime.utcnow())
-    }
-
-            with open(csv_path, 'a', encoding='UTF8', newline='') as f:
-                writer = csv.DictWriter(f, header)
-                writer.writerow(csv_entry)
-
         # if time_interval is supplied, wait for *time_interval* seconds
         if time_interval > 0:
             time.sleep(time_interval)
-
-    # timestamp of when the experiment ended
-    experiment_end = datetime.utcnow()
-
-    # print out the start and the end timestamps of the entire experiment
-    print(f'Experiment started: {experiment_start}')
-    print(f"Experiment ended: {experiment_end}")
 
     return global_model
 
